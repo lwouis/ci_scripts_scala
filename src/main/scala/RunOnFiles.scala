@@ -1,5 +1,7 @@
+import better.files._
 import monix.eval.Task
 import org.rogach.scallop._
+import scala.compat.Platform.EOL
 
 import scala.concurrent.Await
 import scala.concurrent.duration.Duration
@@ -16,31 +18,49 @@ class Conf(arguments: Seq[String]) extends ScallopConf(arguments) {
   verify()
 }
 
+case class ProcessOutput(name: String, exitValue: Int, stdout: String)
+
 object RunOnFiles {
+  def processTask(shellCommand: String*): Task[ProcessOutput] = {
+    Task {
+      var std = ""
+      val p = Process(Seq("sh", "-c", shellCommand.mkString(" ")))
+        .run(ProcessLogger(s => std = s))
+      ProcessOutput(shellCommand.mkString(" "), p.exitValue, std)
+    }
+  }
+
   def main(args: Array[String]) {
     import monix.execution.Scheduler.Implicits.global
     val conf = new Conf(args)
 
-    Task {
-      var std = ""
-      val logger = ProcessLogger(s => std = s)
-      val value = s"${System.getProperty("user.dir")}/toto/random_process.sh $a"
-      val p = Process(Seq("sh", "-c", value)).run(logger)
-      Seq(a, p.exitValue(), std)
-    })
+//    val set = allFiles
+//      .map(Seq(conf.process(), _))
+//      .map(processTask)
 
-    val value = Task.gather(
-      Range(0, 21).map(a => Task {
-        var std = ""
-        val logger = ProcessLogger(s => std = s)
-        val value = s"${System.getProperty("user.dir")}/toto/random_process.sh $a"
-        val p = Process(Seq("sh", "-c", value)).run(logger)
-        Seq(a, p.exitValue(), std)
+    val async = processTask("git", "ls-files")
+      .flatMap(a => {
+        val strings = a.stdout.split(EOL).toSeq
+        val toto = strings.map(b => processTask(b))
+        val value = Task.gather(toto)
+        value
       })
-    )
-    val async = value.runAsync
-    async.foreach(b => println(b))
+      .runAsync
+        .map(a => {
+          println(a)
+          a
+        })
 
     Await.result(async, Duration.Inf)
+  }
+
+  private def allFiles: Seq[String] = {
+    ("." / "toto" / "src")
+      .listRecursively()
+      .toSeq
+      .filter(_.isRegularFile)
+      .map(_.path.toAbsolutePath.toString)
+      .distinct
+      .sorted
   }
 }
